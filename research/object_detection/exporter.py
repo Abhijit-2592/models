@@ -17,6 +17,8 @@
 import os
 import tempfile
 import tensorflow as tf
+from tensorflow.python.client import session
+from tensorflow.python.saved_model import signature_constants
 from tensorflow.contrib.quantize.python import graph_matcher
 from tensorflow.core.protobuf import saver_pb2
 from tensorflow.python.tools import freeze_graph  # pylint: disable=g-direct-tensorflow-import
@@ -249,7 +251,7 @@ def add_output_tensor_nodes(postprocessed_tensors,
 
 
 def write_saved_model(saved_model_path,
-                      frozen_graph_def,
+                      trained_checkpoint_prefix,
                       inputs,
                       outputs):
   """Writes SavedModel to disk.
@@ -266,36 +268,33 @@ def write_saved_model(saved_model_path,
     inputs: The input placeholder tensor.
     outputs: A tensor dictionary containing the outputs of a DetectionModel.
   """
-  with tf.Graph().as_default():
-    with tf.Session() as sess:
+  saver = tf.train.Saver()
+  with session.Session() as sess:
+    saver.restore(sess, trained_checkpoint_prefix)
+    builder = tf.saved_model.builder.SavedModelBuilder(saved_model_path)
 
-      tf.import_graph_def(frozen_graph_def, name='')
-
-      builder = tf.saved_model.builder.SavedModelBuilder(saved_model_path)
-
-      tensor_info_inputs = {
+    tensor_info_inputs = {
           'inputs': tf.saved_model.utils.build_tensor_info(inputs)}
-      tensor_info_outputs = {}
-      for k, v in outputs.items():
-        tensor_info_outputs[k] = tf.saved_model.utils.build_tensor_info(v)
+    tensor_info_outputs = {}
+    for k, v in outputs.items():
+      tensor_info_outputs[k] = tf.saved_model.utils.build_tensor_info(v)
 
-      detection_signature = (
-          tf.saved_model.signature_def_utils.build_signature_def(
+    detection_signature = (
+        tf.saved_model.signature_def_utils.build_signature_def(
               inputs=tensor_info_inputs,
               outputs=tensor_info_outputs,
-              method_name=tf.saved_model.signature_constants.PREDICT_METHOD_NAME
-          ))
+              method_name=signature_constants.PREDICT_METHOD_NAME))
 
-      builder.add_meta_graph_and_variables(
-          sess,
-          [tf.saved_model.tag_constants.SERVING],
+    builder.add_meta_graph_and_variables(
+          sess, [tf.saved_model.tag_constants.SERVING],
           signature_def_map={
-              tf.saved_model.signature_constants
-              .DEFAULT_SERVING_SIGNATURE_DEF_KEY:
+              'detection_signature':
+                  detection_signature,
+              signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY:
                   detection_signature,
           },
       )
-      builder.save()
+    builder.save()
 
 
 def write_graph_and_checkpoint(inference_graph_def,
@@ -427,7 +426,7 @@ def _export_inference_graph(input_type,
       clear_devices=True,
       initializer_nodes='')
 
-  write_saved_model(saved_model_path, frozen_graph_def,
+  write_saved_model(saved_model_path, trained_checkpoint_prefix,
                     placeholder_tensor, outputs)
 
 
